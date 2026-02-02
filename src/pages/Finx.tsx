@@ -5,13 +5,8 @@ import {
   Bot,
   TrendingUp,
   Users,
-  DollarSign,
   Clock,
   CheckCircle,
-  XCircle,
-  Volume2,
-  Mic,
-  Send,
   Menu,
   X,
   Bell,
@@ -25,24 +20,12 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
-  AlertTriangle,
   Target,
   PlayCircle,
   PauseCircle,
   PhoneCall,
   MessageCircleMore,
-  CreditCard,
-  Smartphone,
-  Globe,
-  TrendingDown,
-  Filter,
-  Calendar,
-  Download,
-  Eye,
-  MoreVertical,
-  UserCheck,
   Building2,
-  IndianRupee,
 } from "lucide-react";
 
 import { ComponentType } from "react";
@@ -514,9 +497,9 @@ const Finx = () => {
         </div>
         <div
           className={`px-2 py-1 rounded-full text-xs font-semibold ${
-            status === "completed"
+            status === "success"
               ? "bg-green-100 text-green-700"
-              : status === "ongoing"
+              : status === "pending"
                 ? "bg-blue-100 text-blue-700"
                 : "bg-orange-100 text-orange-700"
           }`}
