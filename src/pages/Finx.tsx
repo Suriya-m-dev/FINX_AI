@@ -75,9 +75,55 @@ interface DemoScenario {
 const Finx = () => {
   const [activeTab, setActiveTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [selectedDemo, setSelectedDemo] = useState<any>(null);
+  const [selectedDemo, setSelectedDemo] = useState<DemoScenario | null>(null);
   const [demoStep, setDemoStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  const isSpeakingRef = React.useRef(false);
+  const activeUtteranceRef = React.useRef<SpeechSynthesisUtterance | null>(
+    null,
+  );
+
+  const demoStepRef = React.useRef(0);
+  useEffect(() => {
+    demoStepRef.current = demoStep;
+  }, [demoStep]);
+
+  const [features, setFeatures] = useState([
+    {
+      name: "Voice AI Auto-calls",
+      desc: "Auto-trigger for failed payments",
+      enabled: true,
+    },
+    {
+      name: "WhatsApp Integration",
+      desc: "Send payment links via WhatsApp",
+      enabled: true,
+    },
+    {
+      name: "Smart IVR",
+      desc: "Conversational IVR (No Press 1)",
+      enabled: true,
+    },
+    {
+      name: "EMI Reminders",
+      desc: "Proactive payment reminders",
+      enabled: true,
+    },
+    {
+      name: "Agent Escalation",
+      desc: "Transfer complex issues to humans",
+      enabled: false,
+    },
+  ]);
+
+  const toggleFeature = (index: number) => {
+    setFeatures((prev) =>
+      prev.map((item, i) =>
+        i === index ? { ...item, enabled: !item.enabled } : item,
+      ),
+    );
+  };
 
   // Live stats that update in real-time
   const [liveStats, setLiveStats] = useState({
@@ -359,27 +405,70 @@ const Finx = () => {
   ];
 
   // Helper function for speech
-  const speakText = (text: string, language: string) => {
-    if (!("speechSynthesis" in window)) return;
+  const waitForVoices = (): Promise<SpeechSynthesisVoice[]> => {
+    return new Promise((resolve) => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length) {
+        resolve(voices);
+        return;
+      }
+      window.speechSynthesis.onvoiceschanged = () => {
+        resolve(window.speechSynthesis.getVoices());
+      };
+    });
+  };
+
+  const speakText = async (
+    text: string,
+    language: string,
+    onEnd: () => void,
+  ) => {
+    if (!("speechSynthesis" in window)) {
+      onEnd();
+      return;
+    }
+
+    if (isSpeakingRef.current) return; // 🛑 HARD LOCK
+
+    isSpeakingRef.current = true;
+    window.speechSynthesis.cancel();
+
+    const voices = await waitForVoices();
+
+    const voice =
+      voices.find((v) =>
+        language === "Hindi"
+          ? v.lang === "hi-IN"
+          : language === "Tamil"
+            ? v.lang === "ta-IN"
+            : v.lang.startsWith("en"),
+      ) || voices[0];
 
     const utterance = new SpeechSynthesisUtterance(text);
+    activeUtteranceRef.current = utterance;
 
-    utterance.lang =
-      language === "Hindi" ? "hi-IN" : language === "Tamil" ? "ta-IN" : "en-IN";
-
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
     utterance.rate = 1;
     utterance.pitch = 1;
 
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  };
+    utterance.onend = () => {
+      isSpeakingRef.current = false;
+      activeUtteranceRef.current = null;
+      onEnd();
+    };
 
-  // Play demo
-  // const playDemo = (demo: any) => {
-  //   setSelectedDemo(demo);
-  //   setDemoStep(0);
-  //   setIsPlaying(true);
-  // };
+    utterance.onerror = () => {
+      isSpeakingRef.current = false;
+      activeUtteranceRef.current = null;
+      onEnd();
+    };
+
+    // 🔥 Tiny delay prevents Chrome truncation
+    setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 100);
+  };
 
   const playDemo = (demo: DemoScenario) => {
     window.speechSynthesis.cancel(); // stop previous demo
@@ -389,33 +478,36 @@ const Finx = () => {
   };
 
   useEffect(() => {
-    if (isPlaying && selectedDemo && demoStep < selectedDemo.steps.length - 1) {
-      const timer = setTimeout(() => {
-        setDemoStep((prev) => prev + 1);
-      }, 2000);
-      return () => clearTimeout(timer);
-    } else if (demoStep >= selectedDemo?.steps.length - 1) {
-      setIsPlaying(false);
-    }
-  }, [isPlaying, demoStep, selectedDemo]);
-
-  useEffect(() => {
     if (!isPlaying || !selectedDemo) return;
 
     const step = selectedDemo.steps[demoStep];
     if (!step) return;
 
+    // 🛑 If already speaking, do nothing
+    if (step.type === "voice" && isSpeakingRef.current) return;
+
     if (step.type === "voice") {
-      speakText(step.text, selectedDemo.language);
+      speakText(step.text, selectedDemo.language, () => {
+        setDemoStep((prev) => {
+          if (prev < selectedDemo.steps.length - 1) {
+            return prev + 1;
+          }
+          setIsPlaying(false);
+          return prev;
+        });
+      });
+      return;
     }
 
     const timer = setTimeout(() => {
-      if (demoStep < selectedDemo.steps.length - 1) {
-        setDemoStep((prev) => prev + 1);
-      } else {
+      setDemoStep((prev) => {
+        if (prev < selectedDemo.steps.length - 1) {
+          return prev + 1;
+        }
         setIsPlaying(false);
-      }
-    }, 2500);
+        return prev;
+      });
+    }, 2000);
 
     return () => clearTimeout(timer);
   }, [demoStep, isPlaying, selectedDemo]);
@@ -780,6 +872,9 @@ const Finx = () => {
                 <h3 className="font-bold text-lg">{selectedDemo.title}</h3>
                 <button
                   onClick={() => {
+                    window.speechSynthesis.cancel();
+                    activeUtteranceRef.current = null;
+                    isSpeakingRef.current = false;
                     setSelectedDemo(null);
                     setIsPlaying(false);
                     setDemoStep(0);
@@ -803,90 +898,72 @@ const Finx = () => {
             </div>
 
             <div className="p-4 space-y-3">
-              {selectedDemo.steps.slice(0, demoStep + 1).map(
-                (
-                  step: {
-                    type: string;
-                    speaker:
-                      | string
-                      | number
-                      | boolean
-                      | React.ReactElement<
-                          any,
-                          string | React.JSXElementConstructor<any>
-                        >
-                      | Iterable<React.ReactNode>
-                      | null
-                      | undefined;
-                    text:
-                      | string
-                      | number
-                      | boolean
-                      | React.ReactElement<
-                          any,
-                          string | React.JSXElementConstructor<any>
-                        >
-                      | Iterable<React.ReactNode>
-                      | React.ReactPortal
-                      | null
-                      | undefined;
-                  },
-                  idx: React.Key | null | undefined,
-                ) => (
-                  <div
-                    key={idx}
-                    className={`p-3 rounded-lg ${
-                      step.type === "alert"
-                        ? "bg-red-50 border-l-4 border-red-500"
-                        : step.type === "action"
-                          ? "bg-blue-50 border-l-4 border-blue-500"
-                          : step.type === "success"
-                            ? "bg-green-50 border-l-4 border-green-500"
-                            : step.type === "result"
-                              ? "bg-purple-50 border-l-4 border-purple-500"
-                              : step.speaker === "ai"
-                                ? "bg-blue-100 ml-0 mr-8"
-                                : step.speaker === "customer"
-                                  ? "bg-gray-100 ml-8 mr-0"
-                                  : step.speaker === "merchant"
-                                    ? "bg-green-100 ml-0 mr-8"
-                                    : step.speaker === "agent"
-                                      ? "bg-orange-100 ml-0 mr-8"
-                                      : "bg-gray-50"
-                    } ${idx === demoStep ? "animate-pulse" : ""}`}
-                  >
-                    <div className="flex items-start gap-2">
-                      {step.speaker === "ai" && (
-                        <Bot size={16} className="text-blue-600 mt-0.5" />
-                      )}
-                      {step.speaker === "customer" && (
-                        <Users size={16} className="text-gray-600 mt-0.5" />
-                      )}
-                      {step.speaker === "merchant" && (
-                        <Building2
-                          size={16}
-                          className="text-green-600 mt-0.5"
-                        />
-                      )}
-                      {step.speaker === "agent" && (
-                        <HeadphonesIcon
-                          size={16}
-                          className="text-orange-600 mt-0.5"
-                        />
-                      )}
-                      {step.speaker === "system" && (
-                        <Zap size={16} className="text-purple-600 mt-0.5" />
-                      )}
-                      <div className="flex-1">
-                        <div className="text-xs font-semibold text-gray-600 mb-1 capitalize">
-                          {step.speaker}
+              {selectedDemo.steps
+                .slice(0, demoStep + 1)
+                .map((step: DemoStep, idx: number) => {
+                  const typeStyle =
+                    step.type === "alert"
+                      ? "bg-red-50 border-l-4 border-red-500"
+                      : step.type === "action"
+                        ? "bg-blue-50 border-l-4 border-blue-500"
+                        : step.type === "success"
+                          ? "bg-green-50 border-l-4 border-green-500"
+                          : step.type === "result"
+                            ? "bg-purple-50 border-l-4 border-purple-500"
+                            : "";
+
+                  const speakerStyle =
+                    step.speaker === "ai"
+                      ? "bg-blue-100 ml-0 mr-8"
+                      : step.speaker === "customer"
+                        ? "bg-gray-100 ml-8 mr-0"
+                        : step.speaker === "merchant"
+                          ? "bg-green-100 ml-0 mr-8"
+                          : step.speaker === "agent"
+                            ? "bg-orange-100 ml-0 mr-8"
+                            : "bg-gray-50";
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded-lg ${typeStyle || speakerStyle} ${
+                        idx === demoStep ? "animate-pulse" : ""
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        {step.speaker === "ai" && (
+                          <Bot size={16} className="text-blue-600 mt-0.5" />
+                        )}
+                        {step.speaker === "customer" && (
+                          <Users size={16} className="text-gray-600 mt-0.5" />
+                        )}
+                        {step.speaker === "merchant" && (
+                          <Building2
+                            size={16}
+                            className="text-green-600 mt-0.5"
+                          />
+                        )}
+                        {step.speaker === "agent" && (
+                          <HeadphonesIcon
+                            size={16}
+                            className="text-orange-600 mt-0.5"
+                          />
+                        )}
+                        {step.speaker === "system" && (
+                          <Zap size={16} className="text-purple-600 mt-0.5" />
+                        )}
+                        <div className="flex-1">
+                          <div className="text-xs font-semibold text-gray-600 mb-1 capitalize">
+                            {step.speaker}
+                          </div>
+                          <div className="text-sm text-gray-800">
+                            {step.text}
+                          </div>
                         </div>
-                        <div className="text-sm text-gray-800">{step.text}</div>
                       </div>
                     </div>
-                  </div>
-                ),
-              )}
+                  );
+                })}
             </div>
 
             <div className="sticky bottom-0 bg-gray-50 p-4 rounded-b-2xl border-t">
@@ -897,6 +974,9 @@ const Finx = () => {
                 <button
                   onClick={() => {
                     if (isPlaying) {
+                      window.speechSynthesis.cancel();
+                      activeUtteranceRef.current = null;
+                      isSpeakingRef.current = false;
                       setIsPlaying(false);
                     } else if (demoStep < selectedDemo.steps.length - 1) {
                       setIsPlaying(true);
@@ -1082,33 +1162,7 @@ const Finx = () => {
           Platform Configuration
         </h3>
         <div className="space-y-3">
-          {[
-            {
-              name: "Voice AI Auto-calls",
-              desc: "Auto-trigger for failed payments",
-              enabled: true,
-            },
-            {
-              name: "WhatsApp Integration",
-              desc: "Send payment links via WhatsApp",
-              enabled: true,
-            },
-            {
-              name: "Smart IVR",
-              desc: "Conversational IVR (No Press 1)",
-              enabled: true,
-            },
-            {
-              name: "EMI Reminders",
-              desc: "Proactive payment reminders",
-              enabled: true,
-            },
-            {
-              name: "Agent Escalation",
-              desc: "Transfer complex issues to humans",
-              enabled: false,
-            },
-          ].map((feature, idx) => (
+          {features.map((feature, idx) => (
             <div
               key={idx}
               className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
@@ -1119,13 +1173,30 @@ const Finx = () => {
                 </div>
                 <div className="text-xs text-gray-500">{feature.desc}</div>
               </div>
-              <div
-                className={`w-12 h-6 rounded-full relative transition ${feature.enabled ? "bg-green-500" : "bg-gray-300"}`}
+
+              {/* PRO Toggle Switch */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={feature.enabled}
+                onClick={() => toggleFeature(idx)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full 
+                  transition-all duration-300 ease-in-out
+                  outline-none ring-0 focus:ring-0 focus:outline-none
+                  active:outline-none active:ring-0
+                  border-0 shadow-none
+                  appearance-none
+                  select-none touch-manipulation
+                  ${feature.enabled ? "bg-green-500" : "bg-gray-300"}`}
               >
-                <div
-                  className={`absolute top-1 w-4 h-4 bg-white rounded-full transition ${feature.enabled ? "right-1" : "left-1"}`}
-                ></div>
-              </div>
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-md
+                    transform transition-transform duration-300 ease-in-out
+                    will-change-transform
+                    ${feature.enabled ? "translate-x-6" : "translate-x-1"}`}
+                />
+              </button>
             </div>
           ))}
         </div>
@@ -1279,7 +1350,7 @@ const Finx = () => {
       </div>
 
       {/* Main Content */}
-      <div className="p-4">
+      <div className="p-4 mb-4">
         {activeTab === "overview" && <OverviewTab />}
         {activeTab === "demos" && <DemosTab />}
         {activeTab === "merchants" && <MerchantsTab />}
@@ -1342,7 +1413,7 @@ const Finx = () => {
       </button>
 
       {/* Branding Footer */}
-      <div className="fixed bottom-20 left-0 right-0 text-center text-xs text-gray-500 pb-2 pointer-events-none">
+      <div className="fixed bottom-[70px] left-0 right-0 text-center text-xs text-gray-500 pb-2 pointer-events-none">
         Powered by FinX Platform • Rupenet Technology
       </div>
     </div>
